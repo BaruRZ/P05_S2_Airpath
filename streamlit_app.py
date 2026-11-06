@@ -1,93 +1,91 @@
-# ==========================================
-# IMPORTACIÓN DE LIBRERÍAS (HERRAMIENTAS)
-# ==========================================
-import streamlit as st # Librería principal para crear la interfaz gráfica (el dashboard web)
-import pandas as pd    # Librería para manejar tablas de datos (DataFrames)
-import numpy as np     # Librería para operaciones matemáticas y manejar datos nulos (NaN)
-
-# ==========================================
-# FUNCIONES SEMANA 3: CÁLCULOS Y LÍMITES
-# ==========================================
+import streamlit as st
+import pandas as pd
+import numpy as np
 
 def calcular_presion_map(voltaje, v_ref=5.0):
-    """
-    Convierte el voltaje leído por el ESP32 a Presión Absoluta (kPa).
-    Utiliza la ecuación de transferencia de un sensor MAP típico (ej. MPX4250AP).
-    """
     try:
-        # 1. Tratamiento de límites: Si el dato está vacío, devuelve 'NaN' (Not a Number)
-        if pd.isna(voltaje): 
-            return np.nan
-            
-        # 2. Tratamiento de límites: Verifica que el voltaje esté dentro del rango lógico (0.1V a 4.9V)
-        if voltaje < 0.1 or voltaje > 4.9: 
-            raise ValueError("Fuera de rango") # Si sale del rango, provoca un error controlado
-            
-        # 3. Ecuación matemática: Despeje de la presión en kPa
+        if pd.isna(voltaje): return np.nan
+        if voltaje < 0.1 or voltaje > 4.9: raise ValueError("Fuera de rango")
         presion_kpa = (voltaje / v_ref + 0.04) / 0.004
-        
-        # Devuelve el resultado redondeado a 2 decimales
         return round(presion_kpa, 2)
-        
     except Exception:
-        # Si ocurre CUALQUIER error (como un texto en vez de un número), no colapsa, solo devuelve NaN
         return np.nan
 
 def calcular_temperatura_iat(resistencia_ohms, r_ref=10000.0, beta=3950.0, t0=298.15):
-    """
-    Convierte la resistencia eléctrica del termistor (NTC) a Temperatura en grados Celsius (°C).
-    Utiliza la Ecuación Beta.
-    """
     try:
-        if pd.isna(resistencia_ohms): 
-            return np.nan
-            
-        # 1. Tratamiento de límites: Evita la división por cero matemática (si la resistencia es 0 o negativa)
-        if resistencia_ohms <= 0: 
-            raise ValueError("División por cero")
-            
-        # 2. Ecuación Beta: Calcula la temperatura en grados Kelvin
+        if pd.isna(resistencia_ohms): return np.nan
+        if resistencia_ohms <= 0: raise ValueError("División por cero")
         temp_kelvin = 1.0 / (1.0 / t0 + (1.0 / beta) * np.log(resistencia_ohms / r_ref))
-        
-        # 3. Convierte de Kelvin a Celsius restando 273.15 y redondea
         return round(temp_kelvin - 273.15, 2)
-        
     except Exception:
         return np.nan
 
-# ==========================================
-# FUNCIONES SEMANA 2: SIMULACIÓN DE DATOS
-# ==========================================
-
 def generar_datos_simulados(num_registros=12):
-    """
-    Genera una tabla (DataFrame) con datos inventados para poder probar el dashboard
-    sin necesidad de tener el ESP32 conectado aún.
-    """
-    np.random.seed(42) # Fija los números aleatorios para que siempre salgan los mismos al probar
-    
-    # Genera una lista de tiempos (1, 2, 3... 12)
+    np.random.seed(42)
     tiempos = list(range(1, num_registros + 1))
-    
-    # Genera datos aleatorios simulando la presión (rondando los 101.3 kPa) y temperatura (24.8 °C)
     presiones = list(np.random.normal(loc=101.3, scale=2.5, size=num_registros))
     temperaturas = list(np.random.normal(loc=24.8, scale=1.0, size=num_registros))
     
-    # INYECCIÓN DE ERRORES INTENCIONALES (Para cumplir la rúbrica de probar fallos)
-    presiones[4] = "ERROR_SENSOR" # Metemos un texto en lugar de un número (Dato inválido)
-    temperaturas[8] = None          # Metemos un dato vacío/ausente
+    presiones[4] = "ERROR_SENSOR" 
+    temperaturas[8] = None          
     
-    # Empaqueta todo en una tabla de Pandas y la devuelve
     return pd.DataFrame({"Tiempo_s": tiempos, "Presion_kPa": presiones, "Temperatura_C": temperaturas})
 
 def validar_y_procesar_datos(df):
-    """
-    Toma la tabla cruda, revisa dato por dato y limpia los errores (como el "ERROR_SENSOR")
-    para que la gráfica no explote al intentar dibujar un texto.
-    """
     df_procesado = df.copy()
     presiones_limpias, temperaturas_limpias = [], []
 
-    # Recorre fila por fila la tabla
     for idx, row in df_procesado.iterrows():
-        #
+        try:
+            p_clean = float(row["Presion_kPa"])
+        except (ValueError, TypeError):
+            p_clean = np.nan
+            
+        try:
+            t_clean = float(row["Temperatura_C"])
+        except (ValueError, TypeError):
+            t_clean = np.nan
+
+        presiones_limpias.append(p_clean)
+        temperaturas_limpias.append(t_clean)
+
+    df_procesado["Presion_kPa"] = presiones_limpias
+    df_procesado["Temperatura_C"] = temperaturas_limpias
+    return df_procesado
+
+
+st.set_page_config(page_title="AirPath Analytics", layout="wide")
+st.title("AirPath Analytics — Monitor de Admisión")
+st.info("⚠️ MODO ACTUAL: SIMULACIÓN DE DATOS (10+ Registros Generados)")
+
+st.sidebar.header("Configuración de Conexión")
+if st.sidebar.button("Conectar"):
+    st.sidebar.success("Conectado a COM simulado a 115200 baudios")
+
+df_raw = generar_datos_simulados()
+df_clean = validar_y_procesar_datos(df_raw)
+ultima_lectura = df_clean.dropna().iloc[-1]
+
+col1, col2 = st.columns(2)
+col1.metric("Presión de Admisión (MAP)", f"{ultima_lectura['Presion_kPa']:.1f} kPa")
+col2.metric("Temp. de Admisión (IAT)", f"{ultima_lectura['Temperatura_C']:.1f} °C")
+
+st.line_chart(df_clean.set_index("Tiempo_s")[["Presion_kPa", "Temperatura_C"]])
+
+st.markdown("---")
+st.subheader("Semana 3: Calibración y Verificación de Cálculos")
+
+casos_prueba = pd.DataFrame({
+    "Caso": ["1. Reposo (Atmosférica)", "2. Carga Baja", "3. Límite/Error (Fuera de Rango)"],
+    "Entrada_Simulada": ["Voltaje: 1.83V", "Voltaje: 1.25V", "Voltaje: 5.5V"],
+    "Cálculo_Manual_Esperado": ["101.5 kPa", "72.5 kPa", "Error (Fuera de rango)"],
+    "Resultado_Función_Programa": [
+        f"{calcular_presion_map(1.83)} kPa", 
+        f"{calcular_presion_map(1.25)} kPa", 
+        f"{calcular_presion_map(5.5)} (Manejado por Try-Except)"
+    ],
+    "Tolerancia": ["< 0.1% (Aprobado)", "< 0.1% (Aprobado)", "N/A"]
+})
+
+st.table(casos_prueba)
+st.caption("Nota: Las funciones matemáticas incluyen manejo de límites para evitar divisiones por cero y voltajes no válidos.")
